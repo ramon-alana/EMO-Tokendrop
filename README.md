@@ -28,16 +28,16 @@ Training JSONL records contain `id` (unique, prefixed `train_`), `images` (one a
 ```bash
 # Random TokenDrop SFT: 2,400 steps
 python train.py sft \
-  --model /path/to/base100 \
-  --train /path/to/train.jsonl \
-  --traces '/path/to/teacher/*.jsonl' \
+  --model /path/t/base100 \
+  --train /path/t/train.jsonl \
+  --traces '/path/t/teacher/*.jsonl' \
   --output outputs/sft_seed18 --seed 18
 
 # Joint actor-selector RL: 1,000 steps
 python train.py rl \
-  --model /path/to/base100 \
-  --train /path/to/train.jsonl \
-  --dev-file /path/to/train_dev200.jsonl \
+  --model /path/t/base100 \
+  --train /path/t/train.jsonl \
+  --dev-file /path/t/train_dev200.jsonl 
   --sft-adapter outputs/sft_seed18/adapter_step2400.pt \
   --output outputs/rl_seed18 --seed 18
 ```

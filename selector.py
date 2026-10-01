@@ -37,7 +37,7 @@ def image_features(pixel_values, grid_thw, spatial_merge_unit, spatial_merge_siz
         torch.linspace(-1, 1, width, device=pixel_values.device), indexing="ij"
     )
     coords = torch.stack((ys.flatten(), xs.flatten()), dim=-1)
-    return torch.cat((means, stds, coords), dim=-1).reshape(height, width, 8).permute(2, 0, 1).unsqueeze(0)
+    return torch.cat((means, stds, coords), dim=-1).reshape(height, width, 8).permute(0, 1).unsqueeze(0)
 
 
 @torch.inference_mode()

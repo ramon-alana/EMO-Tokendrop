@@ -21,16 +21,14 @@ from jinja2 import Template
 from PIL import Image
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
-from affectprune_dynamic_context import append_response, compact_prompt
-from affectprune_lora import adapter_state, install_lora, load_adapter
+from tokens import append_response, compact_prompt
+from lora import adapter_state, install_lora, load_adapter
 
 
-ROOT = Path(os.environ.get("EMOR3_PROJECT_ROOT", Path(__file__).resolve().parent))
-MODEL_PATH = Path(os.environ.get("AFFECT_SFT_BASE_MODEL", ROOT / "models/Qwen2.5-VL-3B-Instruct"))
-TRACE_GLOB = os.environ.get(
-    "AFFECT_SFT_TRACE_GLOB", str(ROOT / "outputs/affectprune_sft_teacher_train2000/teacher_shard*/full.jsonl")
-)
-OUT = Path(os.environ.get("AFFECT_SFT_OUTPUT", ROOT / "outputs/affectprune_randomdrop_sft"))
+ROOT = Path(__file__).resolve().parent
+MODEL_PATH = Path(os.environ["AFFECT_SFT_BASE_MODEL"])
+TRACE_GLOB = os.environ["AFFECT_SFT_TRACE_GLOB"]
+OUT = Path(os.environ["AFFECT_SFT_OUTPUT"])
 STEPS = int(os.environ.get("AFFECT_SFT_STEPS", "1"))
 GRAD_ACCUM = int(os.environ.get("AFFECT_SFT_GRAD_ACCUM", "1"))
 SEED = int(os.environ.get("AFFECT_SFT_SEED", "20260928"))
@@ -52,7 +50,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 torch.manual_seed(SEED)
 random.seed(SEED)
 
-train_rows = [json.loads(line) for line in (ROOT / "data/EmoSet2k_full/train.jsonl").read_text(encoding="utf-8").splitlines() if line]
+train_rows = [json.loads(line) for line in Path(os.environ["AFFECT_TRAIN_FILE"]).read_text(encoding="utf-8").splitlines() if line]
 train_by_id = {str(row["id"]): row for row in train_rows}
 if len(train_by_id) != len(train_rows):
     raise ValueError("Duplicate training IDs")
@@ -99,7 +97,7 @@ model.gradient_checkpointing_enable()
 model.enable_input_require_grads()
 model.train()
 optimizer = torch.optim.AdamW(trainable, lr=LR, weight_decay=0.0)
-format_prompt = Template((ROOT / "emo-r3/examples/format_prompt/emor3.jinja").read_text(encoding="utf-8"))
+format_prompt = Template((ROOT / "format_prompt.jinja").read_text(encoding="utf-8"))
 ids = sorted(targets)
 class_counts = dict(Counter(str(train_by_id[sample_id]["answer"]) for sample_id in ids))
 cycle = []

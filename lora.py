@@ -1,9 +1,4 @@
-"""Minimal trainable LoRA layers for Qwen2.5-VL actor cold start.
-
-This local implementation avoids changing the shared training environment.
-Only decoder linear layers are adapted; pretrained weights stay frozen until
-an explicit merge for the subsequent EMO-R3 RL stage.
-"""
+"""LoRA adapters for the Qwen2.5-VL language decoder."""
 
 from __future__ import annotations
 

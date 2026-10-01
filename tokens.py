@@ -1,10 +1,4 @@
-"""Single-image Qwen2.5-VL pre-ViT pruning with genuinely shorter LLM context.
-
-Unlike the earlier zero-restoration probe, dropped image placeholders are
-removed from the language sequence. Original multimodal RoPE coordinates are
-retained for kept patches; the helper returns inputs_embeds and position_ids
-for a direct Qwen2.5-VL forward. It supports one still image per call.
-"""
+"""Single-image Qwen2.5-VL token gathering before ViT with original positions preserved."""
 
 from __future__ import annotations
 

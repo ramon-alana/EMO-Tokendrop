@@ -1,15 +1,7 @@
-"""Joint actor/selector group-relative RL after random-TokenDrop SFT.
-
-Each image produces a group of sampled spatial/budget actions and SET
-responses. The same group-relative reward updates actor LoRA and selector in
-one optimizer step. Hard token decisions use policy-gradient log-probabilities;
-the ViT and LLM contexts are genuinely shortened. No frozen selector cache is
-used. This is an experimental trainer, separate from earlier two-stage runs.
-"""
+"""Joint actor/selector group-relative RL after random-TokenDrop SFT."""
 
 from __future__ import annotations
 
-import importlib.util
 import hashlib
 import json
 import math
@@ -24,15 +16,15 @@ from jinja2 import Template
 from PIL import Image
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
-from affectprune_confidence_selector import (
-    ConfidenceSelector, FreeRatioSelector, image_features, sepm_coarse_confidence,
+from selector import (
+    FreeRatioSelector, image_features, sepm_coarse_confidence,
 )
-from affectprune_dynamic_context import append_response, compact_prompt, generate_compacted
-from affectprune_lora import adapter_state, install_lora, load_adapter
-from analyze_emor3_attention import FOE_TEXT, attention_match_score, attention_view, retained_attention_mass
+from tokens import append_response, compact_prompt, generate_compacted
+from lora import adapter_state, install_lora, load_adapter
+from attention import FOE_TEXT, attention_match_score, attention_view, retained_attention_mass
 
 
-ROOT = Path(os.environ.get("EMOR3_PROJECT_ROOT", Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent
 SFT_ADAPTER = Path(os.environ["AFFECT_JOINT_SFT_ADAPTER"])
 OUT = Path(os.environ["AFFECT_JOINT_OUTPUT"])
 STEPS = int(os.environ.get("AFFECT_JOINT_STEPS", "1"))
@@ -46,9 +38,7 @@ RESUME = Path(os.environ["AFFECT_JOINT_RESUME_CHECKPOINT"]) if os.environ.get("A
 ALIGN_WEIGHT = float(os.environ.get("AFFECT_JOINT_ALIGN_WEIGHT", "0.15"))
 DROP_WEIGHT = float(os.environ.get("AFFECT_JOINT_DROP_WEIGHT", "0.05"))
 KL_COEF = float(os.environ.get("AFFECT_JOINT_KL_COEF", "0.03"))
-SELECTOR_POLICY = os.environ.get("AFFECT_JOINT_SELECTOR_POLICY", "four_bins")
-if SELECTOR_POLICY not in {"four_bins", "free_bernoulli"}:
-    raise ValueError("Unknown selector policy")
+SELECTOR_POLICY = "free_bernoulli"
 if STEPS < 1 or GROUP_SIZE < 2 or MAX_TOKENS < 8:
     raise ValueError("Invalid joint training dimensions")
 if SAVE_EVERY < 1 or FULL_SAVE_EVERY < 1 or (RESUME is not None and not RESUME.is_file()):
@@ -62,12 +52,8 @@ torch.manual_seed(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
 
-spec = importlib.util.spec_from_file_location(
-    "emor3_original_reward", ROOT / "emo-r3/examples/reward_function/emor3.py"
-)
-original_reward = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(original_reward)
-model_path = Path(os.environ.get("AFFECT_JOINT_BASE_MODEL", ROOT / "models/Qwen2.5-VL-3B-Instruct"))
+import reward as original_reward
+model_path = Path(os.environ["AFFECT_JOINT_BASE_MODEL"])
 processor = AutoProcessor.from_pretrained(model_path, use_fast=True)
 adapter = torch.load(SFT_ADAPTER, map_location="cpu", weights_only=True)
 if adapter["base_model"] != str(model_path):
@@ -88,11 +74,11 @@ install_lora(reference, rank=int(adapter["rank"]), alpha=float(adapter["alpha"])
 load_adapter(reference, adapter["lora"])
 for parameter in reference.parameters():
     parameter.requires_grad_(False)
-selector = (FreeRatioSelector() if SELECTOR_POLICY == "free_bernoulli" else ConfidenceSelector()).to(model.device)
+selector = FreeRatioSelector().to(model.device)
 actor_optimizer = torch.optim.AdamW(trainable, lr=float(os.environ.get("AFFECT_JOINT_ACTOR_LR", "2e-5")))
 selector_optimizer = torch.optim.AdamW(selector.parameters(), lr=float(os.environ.get("AFFECT_JOINT_SELECTOR_LR", "3e-4")))
-format_prompt = Template((ROOT / "emo-r3/examples/format_prompt/emor3.jinja").read_text(encoding="utf-8"))
-rows = [json.loads(line) for line in (ROOT / "data/EmoSet2k_full/train.jsonl").read_text(encoding="utf-8").splitlines() if line]
+format_prompt = Template((ROOT / "format_prompt.jinja").read_text(encoding="utf-8"))
+rows = [json.loads(line) for line in Path(os.environ["AFFECT_TRAIN_FILE"]).read_text(encoding="utf-8").splitlines() if line]
 if not rows or len({str(x["id"]) for x in rows}) != len(rows):
     raise ValueError("Missing or duplicated train rows")
 dev_file = os.environ.get("AFFECT_JOINT_DEV_FILE")
@@ -238,24 +224,22 @@ for step in range(start_step, STEPS):
     if len(foe) != features.shape[-2] * features.shape[-1]:
         raise ValueError("FoE map and current visual groups differ")
     spatial_logits, budget_logits = selector(features, foe, confidence["confidence"])
-    if SELECTOR_POLICY == "free_bernoulli":
-        keep_probabilities = torch.sigmoid(spatial_logits.detach().float())
-        selector_stats = {
-            "keep_probability_mean": float(keep_probabilities.mean()),
-            "keep_probability_min": float(keep_probabilities.min()),
-            "keep_probability_max": float(keep_probabilities.max()),
-            "keep_probability_std": float(keep_probabilities.std(unbiased=False)),
-            "mask_entropy_mean": float(torch.distributions.Bernoulli(probs=keep_probabilities).entropy().mean()),
-        }
-    else:
-        budget_probabilities = torch.softmax(budget_logits.detach().float(), dim=0)
-        selector_stats = {
-            "budget_probabilities": budget_probabilities.cpu().tolist(),
-            "budget_entropy": float(torch.distributions.Categorical(probs=budget_probabilities).entropy()),
-        }
+    keep_probabilities = torch.sigmoid(spatial_logits.detach().float())
+    selector_stats = {
+        "keep_probability_mean": float(keep_probabilities.mean()),
+        "keep_probability_min": float(keep_probabilities.min()),
+        "keep_probability_max": float(keep_probabilities.max()),
+        "keep_probability_std": float(keep_probabilities.std(unbiased=False)),
+        "mask_entropy_mean": float(torch.distributions.Bernoulli(probs=keep_probabilities).entropy().mean()),
+    }
+    # Retain the score-function signal for a zero-gradient diagnostic only.
+    # These read-only diagnostics do not consume RNG or change the loss.
+    spatial_logits.retain_grad()
+    keep_masks = []
     group = []
     for _ in range(GROUP_SIZE):
         keep, selector_logprob, target_drop = selector.sample_action(spatial_logits, budget_logits)
+        keep_masks.append(keep.detach().clone())
         with torch.no_grad():
             compact = compact_prompt(model, inputs, keep)
             response_ids = generate_compacted(model, compact, MAX_TOKENS, do_sample=True)
@@ -305,13 +289,70 @@ for step in range(start_step, STEPS):
     loss.backward()
     actor_norm = float(torch.nn.utils.clip_grad_norm_(trainable, 1.0))
     selector_norm = float(torch.nn.utils.clip_grad_norm_(selector.parameters(), 5.0))
-    if not math.isfinite(actor_norm) or not math.isfinite(selector_norm) or actor_norm <= 0 or selector_norm <= 0:
-        raise FloatingPointError("Joint actor or selector gradient is missing/nonfinite")
+    selector_parameters = list(selector.parameters())
+    selector_missing = sum(parameter.grad is None for parameter in selector_parameters)
+    actor_present = sum(parameter.grad is not None for parameter in trainable)
+    selector_finite = all(parameter.grad is not None and bool(torch.isfinite(parameter.grad).all())
+                          for parameter in selector_parameters)
+    actor_finite = all(bool(torch.isfinite(parameter.grad).all())
+                       for parameter in trainable if parameter.grad is not None)
+    masks_identical = all(torch.equal(keep_masks[0], mask) for mask in keep_masks[1:])
+    zero_advantages = bool((advantages == 0).all())
+    advantage_sum = float(advantages.sum())
+    logits_gradient = spatial_logits.grad
+    logits_gradient_norm = (float(torch.linalg.vector_norm(logits_gradient))
+                            if logits_gradient is not None else None)
+    # For identical actions, each Bernoulli score is identical. With centered
+    # advantages summing to zero, the selector score-function terms cancel
+    # exactly even when the two answer rewards differ. This is not a missing
+    # gradient and both AdamW steps must still run (momentum/decay included).
+    expected_zero_signal = zero_advantages or (masks_identical and abs(advantage_sum) <= 1e-6)
+    allowed_zero_selector = (
+        SELECTOR_POLICY == "free_bernoulli" and selector_norm == 0
+        and selector_missing == 0 and selector_finite and expected_zero_signal
+        and logits_gradient is not None and bool(torch.isfinite(logits_gradient).all())
+        and logits_gradient_norm == 0
+    )
+    gradient_diagnostics = {
+        "selector_missing_parameters": selector_missing,
+        "actor_present_parameters": actor_present,
+        "selector_finite": selector_finite, "actor_finite": actor_finite,
+        "masks_identical": masks_identical,
+        "keep_counts": [int(mask.sum()) for mask in keep_masks],
+        "mask_sha256": [hashlib.sha256(mask.cpu().numpy().tobytes()).hexdigest() for mask in keep_masks],
+        "advantages": advantages.detach().cpu().tolist(),
+        "advantage_sum": advantage_sum,
+        "selector_logits_gradient_norm": logits_gradient_norm,
+        "selector_logit_min": float(spatial_logits.detach().min()),
+        "selector_logit_max": float(spatial_logits.detach().max()),
+        "zero_selector_reason": (
+            "all_group_advantages_zero" if allowed_zero_selector and zero_advantages
+            else "identical_actions_centered_advantage_cancellation" if allowed_zero_selector
+            else None
+        ),
+    }
+    if (not math.isfinite(actor_norm) or not math.isfinite(selector_norm)
+            or actor_norm <= 0 or actor_present == 0 or not actor_finite
+            or selector_missing != 0 or not selector_finite
+            or (selector_norm == 0 and not allowed_zero_selector)):
+        raise FloatingPointError(
+            "Joint gradient failed validation: "
+            f"step={step + 1}, id={row['id']}, actor_norm={actor_norm!r}, "
+            f"selector_norm={selector_norm!r}, rewards={[x['reward'] for x in group]!r}, "
+            f"loss={float(loss.detach())!r}, diagnostics={gradient_diagnostics!r}"
+        )
+    if allowed_zero_selector:
+        print("AFFECTPRUNE_LEGAL_ZERO_SELECTOR", json.dumps({
+            "step": step + 1, "id": row["id"],
+            "rewards": [item["reward"] for item in group],
+            **gradient_diagnostics,
+        }), flush=True)
     actor_optimizer.step()
     selector_optimizer.step()
     record = {
         "step": step + 1, "id": row["id"], "loss": float(loss.detach()),
         "actor_gradient_norm": actor_norm, "selector_gradient_norm": selector_norm,
+        "gradient_diagnostics": gradient_diagnostics,
         "sepm_confidence": confidence, "selector_policy": SELECTOR_POLICY,
         "selector_stats": selector_stats, "group": [
             {key: value for key, value in item.items() if key not in ("compact", "response_ids", "selector_logprob")}
@@ -333,7 +374,7 @@ for step in range(start_step, STEPS):
             "seed": SEED, "selector_policy": SELECTOR_POLICY,
             "base_model": str(model_path),
             "train_dev_hash": dev_hash,
-            "budgets": selector.budgets if SELECTOR_POLICY == "four_bins" else None,
+            "budgets": None,
         }
         torch.save(checkpoint, OUT / f"joint_step{step + 1}.pt")
         if (step + 1) % FULL_SAVE_EVERY == 0 or step + 1 == STEPS:

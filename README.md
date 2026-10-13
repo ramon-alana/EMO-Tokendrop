@@ -4,7 +4,39 @@
 
 ## Abstract
 
-Visual emotion classification depends on which cues a model retains and how it interprets them. Reflective training optimizes generated responses, while attention-guided pruning selects visual inputs through a separate rule. We propose AffectDrop to learn these decisions jointly. Random TokenDrop supervised fine-tuning first adapts the actor to incomplete visual inputs. A token-wise Bernoulli selector and the reflective actor are then optimized from the same sampled mask and response outcomes. The selector combines a confidence-modulated Focus-on-Emotion prior with learned spatial logits, allowing retained positions and count to vary with each image. Shared group-relative rewards couple selection to classification and reflection, and physical gathering shortens the input before the main vision Transformer blocks. Across three training seeds, the complete pipeline achieves 58.45 ± 0.22% accuracy on 2,000 EmoSet images, improving over local EMO-R3 continuation by 8.38 ± 0.55 percentage points while removing 28.97 ± 0.25% of visual groups. Values are means and sample standard deviations. With the final actor and per-image retained count fixed, learned masks outperform random and Focus-on-Emotion masks by 4.35 and 3.75 points in the reference run. Frozen-model evaluation further gives average gains of 6.68 points on Emotion6 and 2.53 points on WebEmo. These complementary comparisons support both the complete pipeline and the learned choice of retained positions.
+Abstract—Multimodal large language models (MLLMs) have
+achieved impressive progress in visual understanding, but still
+face significant challenges in emotional reasoning, where an
+emotional prediction depends on which visual evidence the
+model relies on. In this work, we focus on a model that does
+both: it reasons about the emotion conveyed by an image and
+autonomously selects the visual evidence that supports its own
+judgment. These two requirements pull in opposite directions:
+redundant visual content competes with key emotional cues,
+while removing content may discard the subtle expressions or
+context needed to separate semantically similar emotions. To
+address these, we propose AffectDrop, which jointly optimizes
+visual token selection and reflective emotion reasoning through
+shared task feedback. Specifically, we first perform random
+TokenDrop supervised fine-tuning, removing visual groups so
+that the actor can learn to reason from incomplete images. A
+confidence-guided spatial selector then combines image features
+with a Focus-on-Emotion prior modulated by coarse emotional
+confidence, deciding which groups to retain and how many.
+Finally, joint reinforcement learning scores each sampled mask
+by the response generated on its retained input and updates both
+selection and prediction policies with one shared advantage. Ex-
+perimental results demonstrate that AffectDrop attains 58.45%
+mean accuracy on the EmoSet subset while removing 28.97% of
+visual groups, a 16.75% mean relative gain compared with the
+baseline. Without additional fine-tuning, the same checkpoints
+transfer to Emotion6 and WebEmo with gains of 13.95% and
+5.47%. Ablation studies and a user study show that the cues
+retained by the proposed method better support the model’s
+explanations and predictions. These results indicate that visual
+emotion classification benefits from jointly adapting the emotional
+reasoning and reflective visual token selection. Our code is
+available at https://github.com/ramon-alana/EMO-Tokendrop.
 
 ## Environment
 

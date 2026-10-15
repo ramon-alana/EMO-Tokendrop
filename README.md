@@ -1,77 +1,74 @@
+<div align="center">
+
 # AffectDrop
 
-**Joint Token Selection and Reflective Reinforcement Learning for Visual Emotion Classification**
+### Joint Visual Token Selection and Reflective Reasoning<br>for Visual Emotion Understanding
 
-## Abstract
+**Learning what to retain, and how to reason about emotion.**
 
-Abstract—Multimodal large language models (MLLMs) have
-achieved impressive progress in visual understanding, but still
-face significant challenges in emotional reasoning, where an
-emotional prediction depends on which visual evidence the
-model relies on. In this work, we focus on a model that does
-both: it reasons about the emotion conveyed by an image and
-autonomously selects the visual evidence that supports its own
-judgment. These two requirements pull in opposite directions:
-redundant visual content competes with key emotional cues,
-while removing content may discard the subtle expressions or
-context needed to separate semantically similar emotions. To
-address these, we propose AffectDrop, which jointly optimizes
-visual token selection and reflective emotion reasoning through
-shared task feedback. Specifically, we first perform random
-TokenDrop supervised fine-tuning, removing visual groups so
-that the actor can learn to reason from incomplete images. A
-confidence-guided spatial selector then combines image features
-with a Focus-on-Emotion prior modulated by coarse emotional
-confidence, deciding which groups to retain and how many.
-Finally, joint reinforcement learning scores each sampled mask
-by the response generated on its retained input and updates both
-selection and prediction policies with one shared advantage. Ex-
-perimental results demonstrate that AffectDrop attains 58.45%
-mean accuracy on the EmoSet subset while removing 28.97% of
-visual groups, a 16.75% mean relative gain compared with the
-baseline. Without additional fine-tuning, the same checkpoints
-transfer to Emotion6 and WebEmo with gains of 13.95% and
-5.47%. Ablation studies and a user study show that the cues
-retained by the proposed method better support the model’s
-explanations and predictions. These results indicate that visual
-emotion classification benefits from jointly adapting the emotional
-reasoning and reflective visual token selection. Our code is
-available at https://github.com/ramon-alana/EMO-Tokendrop.
+[Overview](#overview) &nbsp; | &nbsp; [Framework](#framework) &nbsp; | &nbsp; [Reasoning Examples](#reasoning-examples) &nbsp; | &nbsp; [Key Findings](#key-findings)
 
-## Environment
+</div>
 
-Linux, Python 3.10, and a CUDA GPU supporting BF16. The RL stage loads both the actor and frozen reference on one GPU.
+---
 
-```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
-pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
-pip install -r requirements.txt
-```
+## Overview
 
-The reward and SET prompt are from [EMO-R3](https://github.com/SeerRay-Lab/emo-r3), under [Apache-2.0](LICENSE-EMO-R3).
+An emotional judgment depends not only on how a model reasons, but also on the visual evidence it receives. Redundant content can distract from meaningful cues, while indiscriminate token removal can discard the expressions and context needed to distinguish related emotions.
 
-## Training
+**AffectDrop learns visual token selection together with reflective emotional reasoning.** Rather than treating token removal as a fixed preprocessing rule, it connects the choice of retained evidence to the quality of the resulting response.
 
-Run from the repository root. Supply a local Qwen2.5-VL-3B-compatible base checkpoint with its processor, training images, and prepared teacher traces. The reported pipeline starts from the local EMO-R3 100-step checkpoint (`base100`), not the unadapted Qwen checkpoint. Model weights and data are not bundled in this code-only package.
+<p align="center">
+  <img src="assets/affectdrop_overview.png" width="960" alt="AffectDrop motivation and framework: equal token counts can preserve different evidence, while shared task feedback jointly adapts selection and reasoning.">
+</p>
 
-Training JSONL records contain `id` (unique, prefixed `train_`), `images` (one absolute image path), `problem` (prompt containing `<image>`), and `answer` (emotion name). Teacher JSONL records contain the matching `id`, `response`, and Boolean `correct`, `strict_set`, and `hit_length_cap` fields. SFT uses correct, strict, uncapped traces. The frozen development file contains 200 TRAIN records; its first 64 unique IDs are excluded from the 2,000-image RL training pool, leaving 1,936 images.
+*Equal token counts do not imply equal emotional evidence. The illustration contrasts different retained cues and shows how selection and reasoning interact through shared task feedback. Masks in this overview are schematic.*
 
-```bash
-# Random TokenDrop SFT: 2,400 steps
-python train.py sft \
-  --model /path/t/base100 \
-  --train /path/t/train.jsonl \
-  --traces '/path/t/teacher/*.jsonl' \
-  --output outputs/sft_seed18 --seed 18
+## Framework
 
-# Joint actor-selector RL: 1,000 steps
-python train.py rl \
-  --model /path/t/base100 \
-  --train /path/t/train.jsonl \
-  --dev-file /path/t/train_dev200.jsonl 
-  --sft-adapter outputs/sft_seed18/adapter_step2400.pt \
-  --output outputs/rl_seed18 --seed 18
-```
+| Component | Role |
+| :--- | :--- |
+| **Random TokenDrop cold start** | Prepares the reasoning actor to interpret incomplete visual evidence. |
+| **Confidence-guided visual selection** | Combines image features with emotion-oriented attention to learn which groups to retain and how much evidence to provide. |
+| **Joint reflective learning** | Uses feedback from the generated response to adapt the selector and reasoner together. |
 
-Use the same base checkpoint in both stages and a new output directory for each run. Repeat both stages with seeds 24 and 36 and their corresponding output/adapter paths. SFT defaults to rank-16 LoRA, learning rate 1e-4, and cosine decay; RL uses group size 2, actor/selector learning rates 2e-5/3e-4, and 384 response tokens. `python train.py sft --help` and `python train.py rl --help` list the options.
+The selected groups form the visual input used for reasoning. This makes the input-selection stage inspectable while allowing the model to adapt to the evidence it retains.
+
+## Reasoning Examples
+
+The following paired examples are reproduced from the paper. Each contrasts a full-input response with a learned-retention response from the same actor. Gray cells mark dropped visual groups; the text is excerpted from the recorded model outputs.
+
+### From playful appearance to excitement
+
+<p align="center">
+  <img src="assets/reasoning_excitement.png" width="740" alt="Paired excitement example: the full-input response emphasizes playful objects, while learned retention emphasizes raised arms and smiles.">
+</p>
+
+The full-input response focuses on a playful atmosphere. With learned retention, the response instead connects gestures and smiles to high arousal, shifting the prediction from amusement to excitement.
+
+### From the depicted person's attitude to evoked fear
+
+<p align="center">
+  <img src="assets/reasoning_fear.png" width="740" alt="Paired fear example: the full-input response emphasizes determination or aggression, while learned retention focuses on a menacing axe and the fear it may evoke.">
+</p>
+
+The full-input response interprets the person's appearance in terms of determination or aggression. The learned-retention response emphasizes the threatening object and the fear it could evoke in an observer.
+
+*These selected cases illustrate changes in the focus of emotional reasoning; they are not estimates of how frequently such changes occur. Gray masks visualize removal, rather than gray pixels supplied to the model.*
+
+## Key Findings
+
+- **Learning where to look matters.** With the actor and per-image retained count fixed, learned retention outperforms random and attention-ranked selection in the reported evaluation. The advantage is therefore not explained by the retained count alone.
+- **Selection and reasoning benefit from adapting together.** Joint updating performs better than the tested actor-only and selector-only training variants.
+- **The benefit extends beyond the training dataset.** The EmoSet-trained models retain an advantage over the reproduced EMO-R3 baseline on Emotion6 and WebEmo without target-dataset fine-tuning.
+- **Correctness and perceived support are complementary.** Human evaluation gives learned retention higher mean cue-support ratings, while showing that classification accuracy and perceived support need not rank all input conditions in the same order.
+
+Together, these observations support treating visual selection as a learned part of emotional reasoning, rather than a separate redundancy-removal step. The paper provides the quantitative comparisons and experimental conditions; this page focuses on the method and qualitative examples.
+
+## Release Scope
+
+This README is a visual overview, not a complete reproduction guide. Model checkpoints, dataset files, and teacher-generated training traces are not included in this release. The figures above are illustrations from the paper, not a downloadable evaluation dataset.
+
+## Acknowledgments
+
+The base reflective reward implementation and Structured Emotional Thinking (SET) prompt are adapted from [EMO-R3](https://github.com/SeerRay-Lab/emo-r3). See [LICENSE-EMO-R3](LICENSE-EMO-R3) for the upstream license. AffectDrop combines this base reward with attention matching and token-removal feedback to train visual selection jointly with the reasoning actor.
